@@ -1,0 +1,112 @@
+{
+  "training_summary": {
+    "total_epochs": 100,
+    "total_images": 1380,
+    "num_classes": 15,
+    "image_scale": 1.0,
+    "batch_size": 8,
+    "learning_rate": 5e-05,
+    "optimizer": "AdamW",
+    "loss": "FocalLoss(gamma=2) + DiceLoss",
+    "scheduler": "CosineAnnealingLR",
+    "augmentation": "flip + rot90 + brightness + contrast"
+  },
+  "test_metrics": {
+    "dice_score": 91.55,
+    "miou": 85.23,
+    "fwiou": 93.27,
+    "pixel_accuracy": 96.45
+  },
+  "per_class_results": {
+    "unlabeled": {
+      "mask_value": 0,
+      "iou": 84.38,
+      "dice": 91.53,
+      "frequency": 19.37
+    },
+    "rooftop": {
+      "mask_value": 1,
+      "iou": 91.38,
+      "dice": 95.49,
+      "frequency": 9.62
+    },
+    "guard_rail": {
+      "mask_value": 2,
+      "iou": 88.78,
+      "dice": 94.05,
+      "frequency": 3.72
+    },
+    "road": {
+      "mask_value": 3,
+      "iou": 94.17,
+      "dice": 97.0,
+      "frequency": 1.53
+    },
+    "dynamic": {
+      "mask_value": 5,
+      "iou": 0.0,
+      "dice": 0.0,
+      "frequency": 0.0
+    },
+    "ground": {
+      "mask_value": 6,
+      "iou": 74.87,
+      "dice": 85.63,
+      "frequency": 0.01
+    },
+    "vegetation": {
+      "mask_value": 13,
+      "iou": 96.68,
+      "dice": 98.31,
+      "frequency": 60.7
+    },
+    "terrain": {
+      "mask_value": 14,
+      "iou": 94.75,
+      "dice": 97.3,
+      "frequency": 3.35
+    },
+    "traffic_sign": {
+      "mask_value": 15,
+      "iou": 88.7,
+      "dice": 94.01,
+      "frequency": 0.09
+    },
+    "pole": {
+      "mask_value": 16,
+      "iou": 0.0,
+      "dice": 0.0,
+      "frequency": 0.0
+    },
+    "caravan": {
+      "mask_value": 17,
+      "iou": 90.21,
+      "dice": 94.85,
+      "frequency": 0.28
+    },
+    "building_facade": {
+      "mask_value": 19,
+      "iou": 94.89,
+      "dice": 97.38,
+      "frequency": 1.11
+    },
+    "car": {
+      "mask_value": 20,
+      "iou": 63.35,
+      "dice": 77.56,
+      "frequency": 0.16
+    },
+    "truck": {
+      "mask_value": 24,
+      "iou": 60.6,
+      "dice": 75.47,
+      "frequency": 0.04
+    },
+    "rider": {
+      "mask_value": 25,
+      "iou": 0.0,
+      "dice": 0.0,
+      "frequency": 0.0
+    }
+  }
+}
