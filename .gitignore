@@ -7,3 +7,6 @@ checkpoints/
 venv/
 .idea/
 wandb/
+
+# Training speed test outputs
+test_speed*.txt
