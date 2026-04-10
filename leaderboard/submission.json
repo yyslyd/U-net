@@ -2,8 +2,8 @@
   "group_name": "YD_Team",
   "project_private_repo_url": "https://github.com/yourusername/project",
   "metrics": {
-    "dice_score": 91.55,
-    "miou": 85.23,
-    "fwiou": 93.27
+    "dice_score": 91.54,
+    "miou": 85.19,
+    "fwiou": 93.26
   }
 }
