@@ -1,0 +1,17 @@
+{
+  "repository_url": "https://github.com/yyslyd/U-net",
+  "inspected_base_commit": "a390cac03cdec0c913d79a5d111554277139a345",
+  "training_report_metrics": {"dice_score": 91.55, "miou": 85.23, "fwiou": 93.27},
+  "leaderboard_metrics": {"dice_score": 91.54, "miou": 85.19, "fwiou": 93.26},
+  "leaderboard_update_commit": "a390cac03cdec0c913d79a5d111554277139a345",
+  "leaderboard_update_date": "2026-04-10",
+  "explanation": "The April 10 commit changed only the leaderboard scores. It supplied no new evaluation trace and did not update the training report. Both historical score sets are retained; the cause of the difference is not established.",
+  "benchmark_reproduced": false,
+  "missing_evidence": ["original dataset", "checkpoint_epoch100.pth", "original train/validation sample manifest", "saved historical confusion matrix"],
+  "historical_evaluation_limitations": [
+    "Training used unsorted file IDs while analysis sorted them; seed 0 alone cannot recover a matching validation set.",
+    "Training validation dropped the final incomplete batch.",
+    "Training Dice excluded class index 0, while analysis included it.",
+    "Historical analysis averaged only classes with ground-truth support, potentially ignoring false positives for absent ground-truth classes."
+  ]
+}

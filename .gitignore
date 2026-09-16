@@ -10,3 +10,11 @@ wandb/
 
 # Training speed test outputs
 test_speed*.txt
+
+# Local maintenance runs
+.venv/
+.pytest_cache/
+training_local.log
+output/smoke-local.json
+output/evaluations/
+prediction.png

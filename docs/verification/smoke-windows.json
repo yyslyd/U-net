@@ -1,0 +1,25 @@
+{
+  "data": "synthetic RGB images and raster masks",
+  "seed": 0,
+  "device": "cpu",
+  "optimizer_steps": 1,
+  "output_shape": [
+    2,
+    15,
+    32,
+    32
+  ],
+  "loss": 3.36796427,
+  "loss_is_finite": true,
+  "weights_updated": true,
+  "checkpoint_reload_equal": true,
+  "benchmark_reproduced": false,
+  "scope": "Preprocessing, 2D model forward/backward, optimizer step, checkpoint reload, label decoding",
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows",
+    "torch": "2.6.0+cu124",
+    "numpy": "2.4.3",
+    "Pillow": "11.3.0"
+  }
+}

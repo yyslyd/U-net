@@ -1,16 +1,13 @@
 import argparse
 import logging
-import os
+import numpy as np
 import random
-import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as transforms
-import torchvision.transforms.functional as TF
 from pathlib import Path
 from torch import optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 try:
@@ -21,12 +18,59 @@ except ImportError:
 
 from evaluate import evaluate
 from unet import UNet
-from utils.data_loading import BasicDataset, CarvanaDataset
+from utils.data_loading import BasicDataset
 from utils.dice_score import dice_loss, FocalLoss
+from utils.segmentation import AMTOWN02_MASK_VALUES
+from utils.splits import (create_split_ids, create_split_manifest, dataset_file_records,
+                          file_sha256, save_split_manifest)
 
 dir_img = Path('./data/imgs/')
 dir_mask = Path('./data/masks/')
 dir_checkpoint = Path('./checkpoints/')
+
+
+class AugmentedSubset(torch.utils.data.Dataset):
+    def __init__(self, subset, augment=True):
+        self.subset = subset
+        self.augment = augment
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, idx):
+        item = self.subset[idx]
+        if not self.augment:
+            return item
+        import torchvision.transforms.functional as TF
+        img, mask = item['image'], item['mask']
+        if random.random() > 0.5:
+            img = TF.hflip(img)
+            mask = TF.hflip(mask.unsqueeze(0)).squeeze(0)
+        if random.random() > 0.5:
+            img = TF.vflip(img)
+            mask = TF.vflip(mask.unsqueeze(0)).squeeze(0)
+        k = random.randint(0, 3)
+        if k > 0:
+            img = torch.rot90(img, k, [1, 2])
+            mask = torch.rot90(mask, k, [0, 1])
+        if random.random() > 0.5:
+            img = TF.adjust_brightness(img, 0.8 + random.random() * 0.4)
+        if random.random() > 0.5:
+            img = TF.adjust_contrast(img, 0.8 + random.random() * 0.4)
+        return {'image': img, 'mask': mask}
+
+
+def build_data_loaders(dataset, train_indices, val_indices, batch_size, seed, augment_train=False):
+    train_subset = Subset(dataset, train_indices)
+    if augment_train:
+        train_subset = AugmentedSubset(train_subset, augment=True)
+    val_subset = Subset(dataset, val_indices)
+    loader_args = dict(batch_size=batch_size, num_workers=0, pin_memory=torch.cuda.is_available())
+    train_loader = DataLoader(
+        train_subset, shuffle=True, generator=torch.Generator().manual_seed(seed), **loader_args
+    )
+    val_loader = DataLoader(val_subset, shuffle=False, drop_last=False, **loader_args)
+    return train_loader, val_loader
 
 
 def train_model(
@@ -42,57 +86,37 @@ def train_model(
         weight_decay: float = 1e-8,
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
+        images_dir: Path = dir_img,
+        masks_dir: Path = dir_mask,
+        checkpoint_dir: Path = dir_checkpoint,
+        seed: int = 0,
+        use_wandb: bool = False,
 ):
+    random.seed(seed)
+    torch.manual_seed(seed)
     # 1. Create dataset (with augmentation for train, without for val)
-    try:
-        dataset = CarvanaDataset(dir_img, dir_mask, img_scale, augment=False)
-    except (AssertionError, RuntimeError, IndexError):
-        dataset = BasicDataset(dir_img, dir_mask, img_scale, augment=False)
+    dataset = BasicDataset(images_dir, masks_dir, img_scale, augment=False,
+                           mask_values=AMTOWN02_MASK_VALUES)
+    if model.n_classes != len(dataset.mask_values):
+        raise ValueError(
+            f'Model has {model.n_classes} classes but AMtown02 requires {len(dataset.mask_values)}'
+        )
 
     # 2. Split into train / validation partitions
-    n_val = int(len(dataset) * val_percent)
-    n_train = len(dataset) - n_val
-    train_set, val_set = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(0))
-
-    # Enable augmentation only for training subset
-    class AugmentedSubset(torch.utils.data.Dataset):
-        def __init__(self, subset, augment=True):
-            self.subset = subset
-            self.augment = augment
-        def __len__(self):
-            return len(self.subset)
-        def __getitem__(self, idx):
-            item = self.subset[idx]
-            if self.augment:
-                import torchvision.transforms.functional as TF
-                img, mask = item['image'], item['mask']
-                if random.random() > 0.5:
-                    img = TF.hflip(img)
-                    mask = TF.hflip(mask.unsqueeze(0)).squeeze(0)
-                if random.random() > 0.5:
-                    img = TF.vflip(img)
-                    mask = TF.vflip(mask.unsqueeze(0)).squeeze(0)
-                k = random.randint(0, 3)
-                if k > 0:
-                    img = torch.rot90(img, k, [1, 2])
-                    mask = torch.rot90(mask, k, [0, 1])
-                if random.random() > 0.5:
-                    img = TF.adjust_brightness(img, 0.8 + random.random() * 0.4)
-                if random.random() > 0.5:
-                    img = TF.adjust_contrast(img, 0.8 + random.random() * 0.4)
-                return {'image': img, 'mask': mask}
-            return item
-
-    train_set_aug = AugmentedSubset(train_set, augment=True)
+    train_ids, val_ids = create_split_ids(dataset.ids, val_percent, seed)
+    index_by_id = {sample_id: index for index, sample_id in enumerate(dataset.ids)}
+    train_indices = [index_by_id[sample_id] for sample_id in train_ids]
+    val_indices = [index_by_id[sample_id] for sample_id in val_ids]
+    n_train, n_val = len(train_indices), len(val_indices)
+    file_records = dataset_file_records(dataset)
 
     # 3. Create data loaders
-    # num_workers=0 since all data is preloaded in RAM (no I/O bottleneck)
-    loader_args = dict(batch_size=batch_size, num_workers=0, pin_memory=True)
-    train_loader = DataLoader(train_set_aug, shuffle=True, **loader_args)
-    val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
+    train_loader, val_loader = build_data_loaders(
+        dataset, train_indices, val_indices, batch_size, seed, augment_train=True
+    )
 
     # (Initialize logging)
-    if HAS_WANDB:
+    if use_wandb and HAS_WANDB:
         experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
         experiment.config.update(
             dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
@@ -100,6 +124,8 @@ def train_model(
         )
     else:
         experiment = None
+        if use_wandb and not HAS_WANDB:
+            logging.warning('Weights & Biases requested but wandb is not installed; continuing without it')
 
     logging.info(f'''Starting training:
         Epochs:          {epochs}
@@ -111,12 +137,13 @@ def train_model(
         Device:          {device.type}
         Images scaling:  {img_scale}
         Mixed Precision: {amp}
+        Split seed:      {seed}
     ''')
 
     # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for AMP
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=learning_rate * 0.01)
-    grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
+    grad_scaler = torch.amp.GradScaler('cuda', enabled=amp)
     criterion = FocalLoss(gamma=2.0) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     logging.info(f'Using Focal Loss (gamma=2.0) + Dice Loss + CosineAnnealingLR')
     global_step = 0
@@ -205,10 +232,18 @@ def train_model(
         scheduler.step()
 
         if save_checkpoint:
-            Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
+            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
             state_dict = model.state_dict()
             state_dict['mask_values'] = dataset.mask_values
-            torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
+            checkpoint_path = Path(checkpoint_dir) / f'checkpoint_epoch{epoch}.pth'
+            torch.save(state_dict, str(checkpoint_path))
+            manifest = create_split_manifest(
+                dataset.ids, val_percent, seed, checkpoint_path.name, file_sha256(checkpoint_path),
+                dataset.mask_values, img_scale, model.bilinear, dataset_files=file_records,
+            )
+            if manifest['train_ids'] != train_ids or manifest['val_ids'] != val_ids:
+                raise RuntimeError('Saved split manifest does not match the training split')
+            save_split_manifest(checkpoint_path.with_suffix('.split.json'), manifest)
             logging.info(f'Checkpoint {epoch} saved! (lr={optimizer.param_groups[0]["lr"]:.2e})')
 
 
@@ -218,13 +253,25 @@ def get_args():
     parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=1, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
-    parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
+    parser.add_argument('--load', '-f', type=Path,
+                        help='Initialize model weights from a checkpoint; starts a new run and saved split')
     parser.add_argument('--scale', '-s', type=float, default=0.5, help='Downscaling factor of the images')
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
                         help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
-    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--classes', '-c', type=int, default=15, help='Number of classes (AMtown02: 15)')
+    parser.add_argument('--images-dir', type=Path, default=dir_img, help='Training image directory')
+    parser.add_argument('--masks-dir', type=Path, default=dir_mask, help='Training mask directory')
+    parser.add_argument('--checkpoint-dir', type=Path, default=dir_checkpoint,
+                        help='Directory for checkpoints and split sidecars')
+    parser.add_argument('--seed', type=int, default=0, help='Dataset split and random augmentation seed')
+    wandb_group = parser.add_mutually_exclusive_group()
+    wandb_group.add_argument('--wandb', dest='use_wandb', action='store_true',
+                             help='Enable Weights & Biases logging')
+    wandb_group.add_argument('--no-wandb', dest='use_wandb', action='store_false',
+                             help='Disable Weights & Biases logging (default)')
+    parser.set_defaults(use_wandb=False)
 
     return parser.parse_args()
 
@@ -233,6 +280,9 @@ if __name__ == '__main__':
     args = get_args()
 
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
 
@@ -248,10 +298,15 @@ if __name__ == '__main__':
                  f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
 
     if args.load:
-        state_dict = torch.load(args.load, map_location=device)
-        del state_dict['mask_values']
+        state_dict = torch.load(args.load, map_location=device, weights_only=True)
+        mask_values = state_dict.pop('mask_values', None)
+        if mask_values != list(AMTOWN02_MASK_VALUES):
+            raise ValueError(
+                f'Initial checkpoint mask_values must equal {list(AMTOWN02_MASK_VALUES)}, '
+                f'got {mask_values}'
+            )
         model.load_state_dict(state_dict)
-        logging.info(f'Model loaded from {args.load}')
+        logging.info(f'Model weights initialized from {args.load}; creating a new run and split')
 
     model.to(device=device)
     try:
@@ -263,7 +318,12 @@ if __name__ == '__main__':
             device=device,
             img_scale=args.scale,
             val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            images_dir=args.images_dir,
+            masks_dir=args.masks_dir,
+            checkpoint_dir=args.checkpoint_dir,
+            seed=args.seed,
+            use_wandb=args.use_wandb,
         )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! '
@@ -279,5 +339,10 @@ if __name__ == '__main__':
             device=device,
             img_scale=args.scale,
             val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            images_dir=args.images_dir,
+            masks_dir=args.masks_dir,
+            checkpoint_dir=args.checkpoint_dir,
+            seed=args.seed,
+            use_wandb=args.use_wandb,
         )

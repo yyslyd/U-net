@@ -1,6 +1,6 @@
 {
   "group_name": "YD_Team",
-  "project_private_repo_url": "https://github.com/yourusername/project",
+  "project_private_repo_url": "https://github.com/yyslyd/U-net",
   "metrics": {
     "dice_score": 91.54,
     "miou": 85.19,
