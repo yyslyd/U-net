@@ -1,0 +1,7 @@
+# Tested maintenance runtime (Python 3.11). Install matching torch/torchvision first;
+# see README. wandb is optional and disabled for all tests and examples.
+matplotlib==3.10.8
+numpy==2.4.3
+Pillow==11.3.0
+tqdm==4.67.1
+pytest==9.0.2
